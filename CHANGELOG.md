@@ -114,6 +114,8 @@
   their consumers fail to process the entries.  Instead, old batches are now dropped
   and an error is logged.
   [#10046](https://github.com/Kong/kong/pull/10046)
+- Fix an issue where 'X-Kong-Upstream-Status' cannot be emitted when response is buffered.
+  [#10056](https://github.com/Kong/kong/pull/10056)
 
 #### Plugins
 
