@@ -302,8 +302,7 @@ for _, strategy in helpers.each_strategy() do
           })
           assert.res_status(200, res)
 
-          -- watting for update
-          ngx.sleep(5)
+          helpers.wait_for_all_config_update()
 
           local proxy_client2
           if subsystems == "http" then
