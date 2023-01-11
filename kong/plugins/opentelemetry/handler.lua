@@ -3,6 +3,7 @@ local http = require "resty.http"
 local clone = require "table.clone"
 local otlp = require "kong.plugins.opentelemetry.otlp"
 local propagation = require "kong.tracing.propagation"
+local register_tracer_plugin = require("kong.pdk.tracing").register_tracer_plugin
 
 local pairs = pairs
 
@@ -113,7 +114,12 @@ local function process_span(span, queue)
   queue:add(pb_span)
 end
 
-function OpenTelemetryHandler:rewrite()
+function OpenTelemetryHandler:init()
+  register_tracer_plugin("opentelemetry")
+end
+
+-- TODO: unify handling of propagation with other tracers like zipkin
+function OpenTelemetryHandler:access()
   local headers = ngx_get_headers()
   local root_span = ngx.ctx.KONG_SPANS and ngx.ctx.KONG_SPANS[1]
 

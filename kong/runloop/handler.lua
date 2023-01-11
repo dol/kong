@@ -13,6 +13,7 @@ local lrucache     = require "resty.lrucache"
 local marshall     = require "kong.cache.marshall"
 
 
+local tracing         = require "kong.pdk.tracing"
 local PluginsIterator = require "kong.runloop.plugins_iterator"
 local instrumentation = require "kong.tracing.instrumentation"
 
@@ -44,6 +45,8 @@ local clear_header      = ngx.req.clear_header
 local http_version      = ngx.req.http_version
 local escape            = require("kong.tools.uri").escape
 
+local is_tracers_enabled_at = tracing.is_tracers_enabled_at
+local terminate_tracers     = tracing.terminate_tracers
 
 local is_http_module   = subsystem == "http"
 local is_stream_module = subsystem == "stream"
@@ -1116,12 +1119,26 @@ return {
       local match_t = router:exec(ctx)
       if not match_t then
         -- tracing
+
+        -- we do not trace 404 requests
         if span then
-          span:set_status(2)
+          span.should_sample = false
           span:finish()
+          terminate_tracers()
         end
 
         return kong.response.exit(404, { message = "no Route matched with those values" })
+      end
+
+      -- is tracing enabled?
+      local route_id = match_t.route and match_t.route.id
+      local service_id = match_t.service and match_t.service.id
+      if not is_tracers_enabled_at(route_id, service_id) then
+        if span then
+          span.should_sample = false
+        end
+
+        terminate_tracers()
       end
 
       -- ends tracing span

@@ -425,7 +425,7 @@ local function new_tracer(name, options)
   -- @tparam table options TODO(mayo)
   -- @treturn table span
   function self.start_span(...)
-    if not base.get_request() then
+    if (not base.get_request()) or ngx.ctx.stoping_tracing then
       return noop_span
     end
 
@@ -488,8 +488,124 @@ setmetatable(noop_tracer, {
   __newindex = NOOP,
 })
 
+local function terminate_tracers()
+  -- stop further tracing
+  ngx.ctx.stoping_tracing = true
+
+  local spans = ngx.ctx.KONG_SPANS
+  if type(spans) ~= "table" then
+    return
+  end
+
+  -- stop existing spans
+  for _, span in ipairs(spans) do
+    if type(span) == "table" then
+      span.should_sample = false
+    end
+  end
+end
+
+local register_tracer_plugin, is_tracers_enabled_at
+do
+  local GLOBAL_QUERY_OPTS = { workspace = ngx.null, show_ws_id = true }
+
+  local tracers = {}
+  local tracers_n = 0
+
+
+  local function get_cache_key(name)
+    return "tracers:is_enabled_at:" .. name
+  end
+
+  -- we cannot decide consumer before access phase, so tracer plugins must
+  -- be defined no_consumer
+  local function get_tracer_enabled_path(name)
+    local enabled_tbl = {}
+    for plugin, err in kong.db.plugins:each(nil, GLOBAL_QUERY_OPTS) do
+      if err then
+        kong.log.crit("could not obtain list of plugins: ", err)
+        goto continue
+      end
+
+      if plugin.name == name and plugin.enabled then
+        if plugin.route and not plugin.service then
+          enabled_tbl[plugin.route.id] = true
+        end
+
+        if plugin.service and not plugin.route then
+          enabled_tbl[plugin.service.id] = true
+        end
+
+        if plugin.route and plugin.service then
+          enabled_tbl[plugin.route.id .. ":" .. plugin.service.id] = true
+        end
+        
+        if not plugin.route and not plugin.servicer then
+          enabled_tbl.global = true
+        end
+      end
+      ::continue::
+    end
+
+    return enabled_tbl
+  end
+
+  local function is_tracer_enabled_at(name, route_id, service_id)
+    local enabled_tbl, err = kong.cache:get(get_cache_key(name), nil, get_tracer_enabled_path, name)
+
+    if not enabled_tbl then
+      return false, err
+    end
+
+    -- any of them enabled, we should do the tracing
+    return enabled_tbl.global or enabled_tbl[route_id] or enabled_tbl[service_id] or enabled_tbl[route_id .. ":" .. service_id]
+  end
+
+  local function invalidate_cache_event(name)
+    local worker_events = kong.worker_events
+    local cache_key = get_cache_key(name)
+    -- invalidations
+    if kong.configuration.database == "off" then
+      worker_events.register(function()
+        kong.cache:invalidate(cache_key)
+      end, "declarative", "reconfigure")
+
+    else
+      worker_events.register(function(data)
+        if data.entity.name == name then
+          kong.cache:invalidate(cache_key)
+        end
+      end, "crud", "plugins")
+    end
+  end
+
+  function register_tracer_plugin(name)
+    invalidate_cache_event(name)
+    tracers_n = tracers_n + 1
+    tracers[tracers_n] = name
+  end
+
+  function is_tracers_enabled_at(router_id, service_id)
+    for i = 1, tracers_n do
+      local enabled, err = is_tracer_enabled_at(tracers[i], router_id, service_id)
+
+      if err then
+        kong.log.debug("failed to check if tracer is enabled: ", err)
+      end
+
+      if enabled then
+        return true
+      end
+    end
+    return false
+  end
+end
+
 return {
   new = function()
     return global_tracer
   end,
+  register_tracer_plugin = register_tracer_plugin,
+  is_tracers_enabled_at = is_tracers_enabled_at,
+  terminate_tracers = terminate_tracers,
 }
