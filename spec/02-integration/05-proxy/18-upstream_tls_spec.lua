@@ -197,7 +197,8 @@ for _, strategy in helpers.each_strategy() do
         nginx_conf = "spec/fixtures/custom_nginx.template",
         stream_listen = helpers.get_proxy_ip(false) .. ":19000,"
                      .. helpers.get_proxy_ip(false) .. ":19001,"
-                     .. helpers.get_proxy_ip(false) .. ":19002",
+                     .. helpers.get_proxy_ip(false) .. ":19002,"
+                     .. helpers.get_proxy_ip(false) .. ":19003",
       }, nil, nil, fixtures))
 
       admin_client = assert(helpers.admin_client())
@@ -302,7 +303,14 @@ for _, strategy in helpers.each_strategy() do
           })
           assert.res_status(200, res)
 
-          helpers.wait_for_all_config_update()
+
+          local opt = {}
+          if subsystems == "stream" then
+            opt.stream_enabled = true
+            opt.stream_port = 19003
+          end
+
+          helpers.wait_for_all_config_update(opt)
 
           local proxy_client2
           if subsystems == "http" then
