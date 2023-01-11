@@ -195,9 +195,9 @@ for _, strategy in helpers.each_strategy() do
       assert(helpers.start_kong({
         database   = strategy,
         nginx_conf = "spec/fixtures/custom_nginx.template",
-        stream_listen = helpers.get_proxy_ip(false) .. ":19000," ..
-        helpers.get_proxy_ip(false) .. ":19001," ..
-        helpers.get_proxy_ip(false) .. ":19002"
+        stream_listen = helpers.get_proxy_ip(false) .. ":19000,"
+                     .. helpers.get_proxy_ip(false) .. ":19001,"
+                     .. helpers.get_proxy_ip(false) .. ":19002",
       }, nil, nil, fixtures))
 
       admin_client = assert(helpers.admin_client())
