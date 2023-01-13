@@ -541,7 +541,7 @@ for _, strategy in helpers.each_strategy() do
           else
             path = "/"
           end
-          local res, err = proxy_client:send {
+          local res = proxy_client:send {
             path    = path,
             headers = {
               ["Host"] = "example.com",
@@ -628,7 +628,7 @@ for _, strategy in helpers.each_strategy() do
             else
               path = "/"
             end
-            local res, err = proxy_client:send {
+            local res = proxy_client:send {
               path    = path,
               headers = {
                 ["Host"] = "example.com",
