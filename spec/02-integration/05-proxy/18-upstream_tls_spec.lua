@@ -207,16 +207,38 @@ for _, strategy in helpers.each_strategy() do
     lazy_teardown(function()
       helpers.stop_kong()
     end)
+  
+    local function get_tls_service_id(subsystems)
+      if subsystems == "http" then
+        return service_mtls.id
+      else
+        return tls_service_mtls.id
+      end      
+    end
+
+    local function get_proxy_client(subsystems, stream_port)
+      if subsystems == "http" then
+        return assert(helpers.proxy_client())
+      else
+         return assert(helpers.proxy_client(20000, stream_port))
+      end
+    end
+
+    local function wait_for_all_config_update(subsystems) 
+      local opt = {}
+      if subsystems == "stream" then
+        opt.stream_enabled = true
+        opt.stream_port = 19003
+      end
+
+      helpers.wait_for_all_config_update(opt)
+    end
+
     for _, subsystems in pairs({"http", "stream"}) do
     describe(subsystems .. " mutual TLS authentication against upstream with Service object", function()
       describe("no client certificate supplied", function()
         it("accessing protected upstream", function()
-          local proxy_client
-          if subsystems == "http" then
-            proxy_client = assert(helpers.proxy_client())
-          else
-            proxy_client = assert(helpers.proxy_client(6000, 19000))
-          end
+          local proxy_client = get_proxy_client(subsystems, 19000)
           local res = assert(proxy_client:send {
             path    = "/mtls",
             headers = {
@@ -232,13 +254,7 @@ for _, strategy in helpers.each_strategy() do
 
       describe(subsystems .. " #db client certificate supplied via service.client_certificate", function()
         lazy_setup(function()
-          local service_id
-          if subsystems == "http" then
-            service_id = service_mtls.id
-          else
-            service_id = tls_service_mtls.id
-          end
-
+          local service_id = get_tls_service_id(subsystems)
           local res = assert(admin_client:patch("/services/" .. service_id, {
             body = {
               client_certificate = { id = certificate.id, },
@@ -250,13 +266,11 @@ for _, strategy in helpers.each_strategy() do
 
         it("accessing protected upstream", function()
           helpers.wait_until(function()
-            local proxy_client
+            local proxy_client = get_proxy_client(subsystems, 19000)
             local path
             if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
               path = "/mtls"
             else
-              proxy_client = assert(helpers.proxy_client(6000, 19000))
               path = "/"
             end
             local res = assert(proxy_client:send {
@@ -275,13 +289,11 @@ for _, strategy in helpers.each_strategy() do
         end)
 
         it("send updated client certificate", function ()
-          local proxy_client
+          local proxy_client = get_proxy_client(subsystems, 19000)
           local path
           if subsystems == "http" then
-            proxy_client = assert(helpers.proxy_client())
             path = "/mtls"
           else
-            proxy_client = assert(helpers.proxy_client(6000, 19000))
             path = "/"
           end
           local res = assert(proxy_client:send {
@@ -303,21 +315,12 @@ for _, strategy in helpers.each_strategy() do
           })
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
 
-          local opt = {}
-          if subsystems == "stream" then
-            opt.stream_enabled = true
-            opt.stream_port = 19003
-          end
-
-          helpers.wait_for_all_config_update(opt)
-
-          local proxy_client2
+          local proxy_client2 = get_proxy_client(subsystems, 19000)
           if subsystems == "http" then
-            proxy_client2 = assert(helpers.proxy_client())
             path = "/mtls"
           else
-            proxy_client2 = assert(helpers.proxy_client(6000, 19000))
             path = "/"
           end
           res = assert(proxy_client2:send {
@@ -342,12 +345,7 @@ for _, strategy in helpers.each_strategy() do
         end)
 
         it("remove client_certificate removes access", function()
-          local service_id
-          if subsystems == "http" then
-            service_id = service_mtls.id
-          else
-            service_id = tls_service_mtls.id
-          end
+          local service_id = get_tls_service_id(subsystems)
           local res = assert(admin_client:patch("/services/" .. service_id, {
             body = {
               client_certificate = ngx.null,
@@ -359,12 +357,7 @@ for _, strategy in helpers.each_strategy() do
 
           local body
           helpers.wait_until(function()
-            local proxy_client
-            if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
-            else
-              proxy_client = assert(helpers.proxy_client(6000, 19000))
-            end
+            local proxy_client= get_proxy_client(subsystems, 19000)
             res = assert(proxy_client:send {
               path    = "/mtls",
               headers = {
@@ -386,12 +379,7 @@ for _, strategy in helpers.each_strategy() do
     describe(subsystems .. " mutual TLS authentication against upstream with Upstream object", function()
       describe("no client certificate supplied", function()
         it("accessing protected upstream", function()
-          local proxy_client
-          if subsystems == "http" then
-            proxy_client = assert(helpers.proxy_client())
-          else
-            proxy_client = assert(helpers.proxy_client(6000, 19002))
-          end
+          local proxy_client= get_proxy_client(subsystems, 19002)
           local res = assert(proxy_client:send {
             path    = "/mtls-upstream",
             headers = {
@@ -425,13 +413,11 @@ for _, strategy in helpers.each_strategy() do
 
         it("accessing protected upstream", function()
           helpers.wait_until(function()
-            local proxy_client
+            local proxy_client = get_proxy_client(subsystems, 19002)
             local path
             if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
               path = "/mtls-upstream"
             else
-              proxy_client = assert(helpers.proxy_client(6000, 19002))
               path = "/"
             end
             local res = assert(proxy_client:send {
@@ -465,14 +451,11 @@ for _, strategy in helpers.each_strategy() do
 
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
+
           local body
           helpers.wait_until(function()
-            local proxy_client
-            if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
-            else
-              proxy_client = assert(helpers.proxy_client(6000, 19002))
-            end
+            local proxy_client = get_proxy_client(subsystems, 19002)
             res = assert(proxy_client:send {
               path    = "/mtls-upstream",
               headers = {
@@ -518,17 +501,17 @@ for _, strategy in helpers.each_strategy() do
           }))
 
           assert.res_status(200, res)
+
+          wait_for_all_config_update(subsystems)
         end)
 
         it("access is allowed because Service.client_certificate overrides Upstream.client_certificate", function()
           helpers.wait_until(function()
-            local proxy_client
+            local proxy_client = get_proxy_client(subsystems, 19002)
             local path
             if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
               path = "/mtls-upstream"
             else
-              proxy_client = assert(helpers.proxy_client(6000, 19002))
               path = "/"
             end
             local res = assert(proxy_client:send {
@@ -551,22 +534,19 @@ for _, strategy in helpers.each_strategy() do
     describe(subsystems .. " TLS verification options against upstream", function()
       describe("tls_verify", function()
         it("default is off", function()
-          local proxy_client
+          local proxy_client = get_proxy_client(subsystems, 19001)
           local path
           if subsystems == "http" then
-            proxy_client = assert(helpers.proxy_client())
             path = "/tls"
           else
-            proxy_client = assert(helpers.proxy_client(6000, 19001))
             path = "/"
           end
-          local res = assert(proxy_client:send {
+          local res, err = proxy_client:send {
             path    = path,
             headers = {
               ["Host"] = "example.com",
             }
-          })
-
+          }
           local body = assert.res_status(200, res)
           assert.equals("it works", body)
           assert(proxy_client:close())
@@ -588,20 +568,18 @@ for _, strategy in helpers.each_strategy() do
 
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
+
           local body
           helpers.wait_until(function()
-            local proxy_client
-            if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
-            else
-              proxy_client = assert(helpers.proxy_client(6000, 19001))
-            end
-            res = assert(proxy_client:send {
+            local proxy_client = get_proxy_client(subsystems, 19001)
+            local err
+            res, err = proxy_client:send {
               path    = "/tls",
               headers = {
                 ["Host"] = "example.com",
               }
-            })
+            }
             if subsystems == "http" then
               return pcall(function()
                 body = assert.res_status(502, res)
@@ -609,6 +587,7 @@ for _, strategy in helpers.each_strategy() do
               end)
             else
               return pcall(function()
+                assert.equals("connection reset by peer", err)
                 assert(proxy_client:close())
               end)
             end
@@ -638,24 +617,23 @@ for _, strategy in helpers.each_strategy() do
 
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
+
           local body
           helpers.wait_until(function()
-            local proxy_client
+            local proxy_client = get_proxy_client(subsystems, 19001)
             local path
             if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
               path = "/tls"
             else
-              proxy_client = assert(helpers.proxy_client(6000, 19001))
               path = "/"
             end
-            res = assert(proxy_client:send {
+            local res, err = proxy_client:send {
               path    = path,
               headers = {
                 ["Host"] = "example.com",
               }
-            })
-
+            }
             return pcall(function()
               body = assert.res_status(200, res)
               assert(proxy_client:close())
@@ -683,6 +661,9 @@ for _, strategy in helpers.each_strategy() do
           }))
 
           assert.res_status(200, res)
+
+          wait_for_all_config_update(subsystems)
+
         end)
 
         it("request is not allowed through if depth limit is too low", function()
@@ -701,26 +682,30 @@ for _, strategy in helpers.each_strategy() do
 
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
+
           local body
           helpers.wait_until(function()
-            local proxy_client
-            if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
-            else
-              proxy_client = assert(helpers.proxy_client(6000, 19001))
-            end
-            res = assert(proxy_client:send {
+            local proxy_client = get_proxy_client(subsystems, 19001)
+            local res, err = proxy_client:send {
               path    = "/tls",
               headers = {
                 ["Host"] = "example.com",
               }
-            })
+            }
 
             return pcall(function()
               if subsystems == "http" then
-                body = assert.res_status(502, res)
+                return pcall(function()
+                  body = assert.res_status(502, res)
+                  assert(proxy_client:close())
+                end)
+              else
+                return pcall(function()
+                  assert.equals("connection reset by peer", err)
+                  assert(proxy_client:close())
+                end)
               end
-              assert(proxy_client:close())
             end)
           end, 10)
           if subsystems == "http" then
@@ -744,15 +729,15 @@ for _, strategy in helpers.each_strategy() do
 
           assert.res_status(200, res)
 
+          wait_for_all_config_update(subsystems)
+
           local body
           helpers.wait_until(function()
-            local proxy_client
+            local proxy_client = get_proxy_client(subsystems, 19001)
             local path
             if subsystems == "http" then
-              proxy_client = assert(helpers.proxy_client())
               path = "/tls"
             else
-              proxy_client = assert(helpers.proxy_client(6000, 19001))
               path = "/"
             end
             res = assert(proxy_client:send {

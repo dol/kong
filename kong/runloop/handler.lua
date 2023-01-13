@@ -1074,6 +1074,7 @@ return {
                        upstream_url_t.host,
                        upstream_url_t.port,
                        service, route)
+      var.upstream_host = upstream_url_t.host
     end,
     after = function(ctx)
       local ok, err, errcode = balancer_execute(ctx)
