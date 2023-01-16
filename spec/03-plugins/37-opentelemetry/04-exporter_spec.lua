@@ -45,9 +45,15 @@ for _, strategy in helpers.each_strategy() do
     end)
 
     -- helpers
-    local function setup_instrumentations(types, config, fixtures, router_scoped)
+    local function setup_instrumentations(types, config, fixtures, router_scoped, service_scoped, another_global)
       local http_srv = assert(bp.services:insert {
         name = "mock-service",
+        host = helpers.mock_upstream_host,
+        port = helpers.mock_upstream_port,
+      })
+
+      local http_srv2 = assert(bp.services:insert {
+        name = "mock-service2",
         host = helpers.mock_upstream_host,
         port = helpers.mock_upstream_port,
       })
@@ -56,18 +62,29 @@ for _, strategy in helpers.each_strategy() do
                                               protocols = { "http" },
                                               paths = { "/" }}))
 
-      assert(bp.routes:insert({ service = http_srv,
+      assert(bp.routes:insert({ service = http_srv2,
                                 protocols = { "http" },
                                 paths = { "/no_plugin" }}))
-
+      print(require"inspect"(http_srv))
       assert(bp.plugins:insert({
         name = "opentelemetry",
         route = router_scoped and route,
+        service = service_scoped and http_srv,
         config = table_merge({
           endpoint = "http://127.0.0.1:" .. HTTP_SERVER_PORT,
           batch_flush_delay = 0, -- report immediately
         }, config)
       }))
+
+      if another_global then
+        assert(bp.plugins:insert({
+          name = "opentelemetry",
+          config = table_merge({
+            endpoint = "http://127.0.0.1:" .. HTTP_SERVER_PORT,
+            batch_flush_delay = 0, -- report immediately
+          }, config)
+        }))
+      end
 
       assert(helpers.start_kong({
         proxy_listen = "0.0.0.0:" .. PROXY_PORT,
@@ -145,51 +162,62 @@ for _, strategy in helpers.each_strategy() do
       end)
     end)
 
-    describe("#scoping", function ()
-      lazy_setup(function()
-        bp, _ = assert(helpers.get_db_utils(strategy, {
-          "services",
-          "routes",
-          "plugins",
-        }, { "opentelemetry" }))
+    for _, case in ipairs{
+      {true, true, true},
+      {true, true, nil},
+      {true, nil, true},
+      {true, nil, nil},
+      {nil, true, true},
+      {nil, true, nil},
+    } do
+      describe("#scoping for" .. (case[1] and " route" or "")
+                              .. (case[2] and " service" or "")
+                              .. (case[3] and "with global" or "")
+      , function ()
+        lazy_setup(function()
+          bp, _ = assert(helpers.get_db_utils(strategy, {
+            "services",
+            "routes",
+            "plugins",
+          }, { "opentelemetry" }))
 
-        setup_instrumentations("all", {
-          headers = {
-            ["X-Access-Token"] = "token",
-          },
-        }, nil, true)
+          setup_instrumentations("all", {
+            headers = {
+              ["X-Access-Token"] = "token",
+            },
+          }, nil, case[1], case[2], case[3])
+        end)
+
+        lazy_teardown(function()
+          helpers.stop_kong()
+          helpers.kill_http_server(HTTP_SERVER_PORT)
+        end)
+
+        it("works", function ()
+          local thread = helpers.http_server(HTTP_SERVER_PORT, { timeout = 10 })
+          local cli = helpers.proxy_client(7000, PROXY_PORT)
+          local r = assert(cli:send {
+            method  = "GET",
+            path    = "/no_plugin",
+          })
+          assert.res_status(200, r)
+          r = assert(cli:send {
+            method  = "GET",
+            path    = "/no_exist",
+          })
+          assert.res_status(404, r)
+
+          -- close client connection
+          cli:close()
+
+          local ok, err = thread:join()
+
+          -- we should have no telemetry reported
+          assert.is_falsy(ok)
+          assert.matches("timeout", err)
+        end)
       end)
-
-      lazy_teardown(function()
-        helpers.stop_kong()
-        helpers.kill_http_server(HTTP_SERVER_PORT)
-      end)
-
-      it("works", function ()
-        local thread = helpers.http_server(HTTP_SERVER_PORT, { timeout = 10 })
-        local cli = helpers.proxy_client(7000, PROXY_PORT)
-        local r = assert(cli:send {
-          method  = "GET",
-          path    = "/no_plugin",
-        })
-        assert.res_status(200, r)
-        r = assert(cli:send {
-          method  = "GET",
-          path    = "/no_exist",
-        })
-        assert.res_status(404, r)
-
-        -- close client connection
-        cli:close()
-
-        local ok, err = thread:join()
-
-        -- we should have no telemetry reported
-        assert.is_falsy(ok)
-        assert.same(err, "timeout")
-      end)
-    end)
-
+    end
     describe("overwrite resource attributes #http", function ()
       lazy_setup(function()
         bp, _ = assert(helpers.get_db_utils(strategy, {
